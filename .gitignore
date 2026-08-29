@@ -1,0 +1,19 @@
+# Local secrets and dotenv files
+.env
+.env.*
+!.env.example
+
+# Local CMS state generated inside projects
+.cms/
+
+# Go build/test artifacts
+/cms
+*.test
+
+# Agents and CMS
+.cms/
+.claude/
+.agents/
+cms
+cms.toml
+docs/
