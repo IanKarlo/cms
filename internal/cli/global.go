@@ -17,7 +17,7 @@ const globalContextName = "global"
 
 // globalInit exposes the reserved global context through the user's home
 // directory. Its links are intentionally reconciled separately from a
-// project, so running cms init in a repository can never touch them.
+// project, so running cms project init in a repository can never touch them.
 func (a *App) globalInit(args []string) error {
 	root, err := os.UserHomeDir()
 	if err != nil {

@@ -7,43 +7,55 @@ import (
 	"testing"
 )
 
-func TestNormalizeCommand(t *testing.T) {
+func TestModuleActionArgs(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want []string
+		name   string
+		module string
+		args   []string
+		action string
+		want   []string
 	}{
-		{name: "skill list", args: []string{"skill", "list", "--plain"}, want: []string{"skill-list", "--plain"}},
-		{name: "mcp import", args: []string{"mcp", "import", "config.json", "--target", "cursor"}, want: []string{"mcp-import", "config.json", "--target", "cursor"}},
-		{name: "context edit", args: []string{"context", "edit", "backend", "--name", "api"}, want: []string{"context-edit", "backend", "--name", "api"}},
-		{name: "global init", args: []string{"global", "init", "--target", "codex"}, want: []string{"global-init", "--target", "codex"}},
-		{name: "project clear", args: []string{"project", "clear", "--yes"}, want: []string{"clear", "--yes"}},
-		{name: "shell completion", args: []string{"shell", "completion", "bash"}, want: []string{"completion", "bash"}},
-		{name: "config remains nested", args: []string{"config", "show"}, want: []string{"config", "show"}},
-		{name: "legacy alias", args: []string{"context-list", "--plain"}, want: []string{"context-list", "--plain"}},
+		{name: "skill list", module: "skill", args: []string{"list", "--plain"}, action: "list", want: []string{"--plain"}},
+		{name: "mcp import", module: "mcp", args: []string{"import", "config.json", "--target", "cursor"}, action: "import", want: []string{"config.json", "--target", "cursor"}},
+		{name: "context edit", module: "context", args: []string{"edit", "backend", "--name", "api"}, action: "edit", want: []string{"backend", "--name", "api"}},
+		{name: "global init", module: "global", args: []string{"init", "--target", "codex"}, action: "init", want: []string{"--target", "codex"}},
+		{name: "project clear", module: "project", args: []string{"clear", "--yes"}, action: "clear", want: []string{"--yes"}},
+		{name: "shell completion", module: "shell", args: []string{"completion", "bash"}, action: "completion", want: []string{"bash"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := normalizeCommand(tt.args)
+			name, got, err := moduleActionArgs(tt.module, tt.args)
 			if err != nil {
-				t.Fatalf("normalizeCommand() error = %v", err)
+				t.Fatalf("moduleActionArgs() error = %v", err)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("normalizeCommand() = %#v, want %#v", got, tt.want)
+			if name != tt.action || !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("moduleActionArgs() = %q, %#v; want %q, %#v", name, got, tt.action, tt.want)
 			}
 		})
 	}
 }
 
-func TestNormalizeCommandRejectsMissingOrUnknownAction(t *testing.T) {
-	for _, args := range [][]string{{"mcp"}, {"context", "publish"}} {
-		got, err := normalizeCommand(args)
+func TestModuleActionArgsRejectsMissingOrUnknownAction(t *testing.T) {
+	for _, test := range []struct {
+		module string
+		args   []string
+	}{{module: "mcp", args: nil}, {module: "context", args: []string{"publish"}}} {
+		name, got, err := moduleActionArgs(test.module, test.args)
 		if err == nil {
-			t.Fatalf("normalizeCommand(%#v) error = nil, want an argument error", args)
+			t.Fatalf("moduleActionArgs(%q, %#v) error = nil, want an argument error", test.module, test.args)
 		}
-		if got != nil || codeOf(err) != 2 {
-			t.Fatalf("normalizeCommand(%#v) = %#v, error code %d; want nil and code 2", args, got, codeOf(err))
+		if name != "" || got != nil || codeOf(err) != 2 {
+			t.Fatalf("moduleActionArgs(%q, %#v) = %q, %#v, error code %d; want empty, nil, and code 2", test.module, test.args, name, got, codeOf(err))
+		}
+	}
+}
+
+func TestRunRejectsUnsupportedCommandForms(t *testing.T) {
+	for _, command := range []string{"skill-list", "mcp-list", "context-edit", "global-init", "init", "freeze", "sync", "clear", "completion"} {
+		err := (&App{}).run([]string{command})
+		if err == nil || codeOf(err) != 2 {
+			t.Fatalf("run(%q) error = %v, want an argument error", command, err)
 		}
 	}
 }

@@ -61,18 +61,18 @@ func TestCLIContextAndInitEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := Run([]string{"context-new", "--name", "backend", "--description", "Backend", "--skill", meta.ID}, &out, &errOut, strings.NewReader("")); code != 0 {
-		t.Fatalf("context-new: %d %s", code, errOut.String())
+	if code := Run([]string{"context", "new", "--name", "backend", "--description", "Backend", "--skill", meta.ID}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("context new: %d %s", code, errOut.String())
 	}
-	if code := Run([]string{"init", "backend", "--target", "codex"}, &out, &errOut, strings.NewReader("")); code != 0 {
-		t.Fatalf("init: %d %s", code, errOut.String())
+	if code := Run([]string{"project", "init", "backend", "--target", "codex"}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("project init: %d %s", code, errOut.String())
 	}
 	link := filepath.Join(root, ".agents", "skills", "cli-demo")
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("expected symlink: %v", err)
 	}
-	if code := Run([]string{"init", "backend", "--target", "codex"}, &out, &errOut, strings.NewReader("")); code != 0 {
-		t.Fatalf("second init: %d %s", code, errOut.String())
+	if code := Run([]string{"project", "init", "backend", "--target", "codex"}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("second project init: %d %s", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "No changes.") {
 		t.Fatalf("expected idempotence output: %s", out.String())
@@ -94,11 +94,11 @@ func TestCLIMCPOnlyContextAndInit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := Run([]string{"context-new", "--name", "mcp-only", "--mcp", mcp.ID}, &out, &errOut, strings.NewReader("")); code != 0 {
-		t.Fatalf("context-new: %d %s", code, errOut.String())
+	if code := Run([]string{"context", "new", "--name", "mcp-only", "--mcp", mcp.ID}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("context new: %d %s", code, errOut.String())
 	}
-	if code := Run([]string{"init", "mcp-only", "--target", "cursor"}, &out, &errOut, strings.NewReader("")); code != 0 {
-		t.Fatalf("init: %d %s", code, errOut.String())
+	if code := Run([]string{"project", "init", "mcp-only", "--target", "cursor"}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("project init: %d %s", code, errOut.String())
 	}
 	config, err := os.ReadFile(filepath.Join(root, ".cursor", "mcp.json"))
 	if err != nil || !strings.Contains(string(config), "demo") {
@@ -351,7 +351,7 @@ func TestGlobalInitCreatesProtectedHomeLinks(t *testing.T) {
 	}
 
 	if err := app.contextEdit([]string{"--name", globalContextName}, false); err == nil {
-		t.Fatal("expected reserved global context to reject context-new")
+		t.Fatal("expected reserved global context to reject context new")
 	}
 	if err := app.globalRemove([]string{"--yes"}); err != nil {
 		t.Fatal(err)

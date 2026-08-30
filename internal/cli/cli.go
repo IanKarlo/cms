@@ -83,10 +83,7 @@ func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 		return 1
 	}
 	app.JSON, app.Quiet, app.Verbose, app.NoColor = global.json, global.quiet, global.verbose, global.noColor
-	args, err = normalizeCommand(args)
-	if err == nil {
-		err = app.run(args)
-	}
+	err = app.run(args)
 	if err != nil {
 		if app.JSON {
 			payload := map[string]any{"error": err.Error(), "code": codeOf(err)}
@@ -118,100 +115,63 @@ func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 	return 0
 }
 
-// normalizeCommand translates the public, grouped command syntax to the
-// internal command names. The latter are kept as aliases so existing scripts
-// using the pre-grouped syntax continue to work.
-func normalizeCommand(args []string) ([]string, error) {
-	if len(args) == 0 {
-		return args, nil
-	}
-
-	actions := map[string]map[string]string{
-		"skill": {
-			"install": "skill-install",
-			"list":    "skill-list",
-			"remove":  "skill-remove",
-		},
-		"mcp": {
-			"install": "mcp-install",
-			"list":    "mcp-list",
-			"remove":  "mcp-remove",
-			"import":  "mcp-import",
-		},
-		"context": {
-			"new":  "context-new",
-			"edit": "context-edit",
-			"list": "context-list",
-		},
-		"global": {
-			"init":   "global-init",
-			"remove": "global-remove",
-		},
-		"project": {
-			"clear":  "clear",
-			"freeze": "freeze",
-			"init":   "init",
-			"sync":   "sync",
-		},
-		"shell": {
-			"completion": "completion",
-		},
-	}
-	moduleActions, ok := actions[args[0]]
-	if !ok {
-		return args, nil
-	}
-	if len(args) < 2 {
-		return nil, fail(2, fmt.Errorf("usage: cms %s <action>", args[0]))
-	}
-	command, ok := moduleActions[args[1]]
-	if !ok {
-		return nil, fail(2, fmt.Errorf("unknown %s action %q", args[0], args[1]))
-	}
-	return append([]string{command}, args[2:]...), nil
-}
-
 type moduleAction struct {
+	name        string
 	usage       string
 	description string
 }
 
+var moduleOrder = []string{"skill", "mcp", "context", "global", "project", "config", "shell"}
+
 var moduleActionsHelp = map[string][]moduleAction{
 	"skill": {
-		{usage: "install [github-url]", description: "installs a skill from GitHub or interactive search"},
-		{usage: "list [--plain|--json]", description: "lists installed skills"},
-		{usage: "remove <id>... [--yes]", description: "removes installed skills"},
+		{name: "install", usage: "install [github-url]", description: "installs a skill from GitHub or interactive search"},
+		{name: "list", usage: "list [--plain|--json]", description: "lists installed skills"},
+		{name: "remove", usage: "remove <id>... [--yes]", description: "removes installed skills"},
 	},
 	"mcp": {
-		{usage: "install [source] [options]", description: "registers an MCP from a package, URL, or command"},
-		{usage: "list [--plain|--json]", description: "lists registered MCPs"},
-		{usage: "remove <id>...", description: "removes registered MCPs that are not in use"},
-		{usage: "import <path> --target <target>", description: "imports MCPs from a harness configuration"},
+		{name: "install", usage: "install [source] [options]", description: "registers an MCP from a package, URL, or command"},
+		{name: "list", usage: "list [--plain|--json]", description: "lists registered MCPs"},
+		{name: "remove", usage: "remove <id>...", description: "removes registered MCPs that are not in use"},
+		{name: "import", usage: "import <path> --target <target>", description: "imports MCPs from a harness configuration"},
 	},
 	"context": {
-		{usage: "new [options]", description: "creates a context of skills and MCPs"},
-		{usage: "edit <context> [options]", description: "edits an existing context"},
-		{usage: "list [--plain|--json]", description: "lists and lets you browse contexts"},
+		{name: "new", usage: "new [options]", description: "creates a context of skills and MCPs"},
+		{name: "edit", usage: "edit <context> [options]", description: "edits an existing context"},
+		{name: "list", usage: "list [--plain|--json]", description: "lists and lets you browse contexts"},
 	},
 	"global": {
-		{usage: "init [options]", description: "configures the global context in harnesses"},
-		{usage: "remove [--yes] [--dry-run]", description: "removes the global context and its managed links"},
+		{name: "init", usage: "init [options]", description: "configures the global context in harnesses"},
+		{name: "remove", usage: "remove [--yes] [--dry-run]", description: "removes the global context and its managed links"},
 	},
 	"project": {
-		{usage: "init [context] [options]", description: "applies a context to the project's harnesses"},
-		{usage: "freeze <context>", description: "writes the current context to cms.toml"},
-		{usage: "sync", description: "synchronizes dependencies defined in cms.toml"},
-		{usage: "clear [--yes] [--dry-run]", description: "removes project configuration and managed links"},
+		{name: "init", usage: "init [context] [options]", description: "applies a context to the project's harnesses"},
+		{name: "freeze", usage: "freeze <context>", description: "writes the current context to cms.toml"},
+		{name: "sync", usage: "sync", description: "synchronizes dependencies defined in cms.toml"},
+		{name: "clear", usage: "clear [--yes] [--dry-run]", description: "removes project configuration and managed links"},
 	},
 	"config": {
-		{usage: "show|list", description: "shows current configuration and effective targets"},
-		{usage: "get default-targets", description: "shows configured default targets"},
-		{usage: "set default-targets <harness>...", description: "sets default targets"},
-		{usage: "unset default-targets", description: "removes the default target configuration"},
+		{name: "show", usage: "show", description: "shows current configuration and effective targets"},
+		{name: "list", usage: "list", description: "shows current configuration and effective targets"},
+		{name: "get", usage: "get default-targets", description: "shows configured default targets"},
+		{name: "set", usage: "set default-targets <harness>...", description: "sets default targets"},
+		{name: "unset", usage: "unset default-targets", description: "removes the default target configuration"},
 	},
 	"shell": {
-		{usage: "completion <bash|zsh|fish|powershell>", description: "generates a shell completion script"},
+		{name: "completion", usage: "completion <bash|zsh|fish|powershell>", description: "generates a shell completion script"},
 	},
+}
+
+func moduleActionArgs(module string, args []string) (string, []string, error) {
+	if len(args) == 0 {
+		return "", nil, fail(2, fmt.Errorf("usage: cms %s <action>", module))
+	}
+	for _, action := range moduleActionsHelp[module] {
+		if args[0] == action.name {
+			return action.name, args[1:], nil
+		}
+	}
+	return "", nil, fail(2, fmt.Errorf("unknown %s action %q", module, args[0]))
 }
 
 func printModuleHelp(w io.Writer, module string) bool {
@@ -229,56 +189,110 @@ func printModuleHelp(w io.Writer, module string) bool {
 }
 
 func (a *App) run(args []string) error {
+	if len(args) == 0 {
+		usage(a.Out)
+		return fail(2, errors.New("a command is required"))
+	}
 	switch args[0] {
 	case "config":
 		return a.config(args[1:])
-	case "skill-list":
-		return a.skillList(args[1:])
-	case "skill-install":
-		return a.skillInstall(args[1:])
-	case "skill-remove":
-		return a.skillRemove(args[1:])
-	case "mcp-install":
-		return a.mcpInstall(args[1:])
-	case "mcp-list":
-		return a.mcpList(args[1:])
-	case "mcp-remove":
-		return a.mcpRemove(args[1:])
-	case "mcp-import":
-		return a.mcpImport(args[1:])
-	case "freeze":
-		return a.freeze(args[1:])
-	case "sync":
-		return a.syncProject(args[1:])
-	case "global-init":
-		return a.globalInit(args[1:])
-	case "global-remove":
-		return a.globalRemove(args[1:])
-	case "context-new":
-		return a.contextEdit(args[1:], false)
-	case "context-edit":
-		if len(args) < 2 {
-			return fail(2, errors.New("usage: cms context edit <context>"))
+	case "skill":
+		action, actionArgs, err := moduleActionArgs("skill", args[1:])
+		if err != nil {
+			return err
 		}
-		return a.contextEdit(args[2:], true, args[1])
-	case "context-list":
-		return a.contextList(args[1:])
-	case "clear":
-		return a.clear(args[1:])
-	case "init":
-		return a.init(args[1:])
-	case "completion":
-		return a.completion(args[1:])
+		switch action {
+		case "install":
+			return a.skillInstall(actionArgs)
+		case "list":
+			return a.skillList(actionArgs)
+		case "remove":
+			return a.skillRemove(actionArgs)
+		}
+	case "mcp":
+		action, actionArgs, err := moduleActionArgs("mcp", args[1:])
+		if err != nil {
+			return err
+		}
+		switch action {
+		case "install":
+			return a.mcpInstall(actionArgs)
+		case "list":
+			return a.mcpList(actionArgs)
+		case "remove":
+			return a.mcpRemove(actionArgs)
+		case "import":
+			return a.mcpImport(actionArgs)
+		}
+	case "context":
+		action, actionArgs, err := moduleActionArgs("context", args[1:])
+		if err != nil {
+			return err
+		}
+		switch action {
+		case "new":
+			return a.contextEdit(actionArgs, false)
+		case "edit":
+			if len(actionArgs) < 1 {
+				return fail(2, errors.New("usage: cms context edit <context>"))
+			}
+			return a.contextEdit(actionArgs[1:], true, actionArgs[0])
+		case "list":
+			return a.contextList(actionArgs)
+		}
+	case "global":
+		action, actionArgs, err := moduleActionArgs("global", args[1:])
+		if err != nil {
+			return err
+		}
+		switch action {
+		case "init":
+			return a.globalInit(actionArgs)
+		case "remove":
+			return a.globalRemove(actionArgs)
+		}
+	case "project":
+		action, actionArgs, err := moduleActionArgs("project", args[1:])
+		if err != nil {
+			return err
+		}
+		switch action {
+		case "init":
+			return a.init(actionArgs)
+		case "freeze":
+			return a.freeze(actionArgs)
+		case "sync":
+			return a.syncProject(actionArgs)
+		case "clear":
+			return a.clear(actionArgs)
+		}
+	case "shell":
+		action, actionArgs, err := moduleActionArgs("shell", args[1:])
+		if err != nil {
+			return err
+		}
+		if action == "completion" {
+			return a.completion(actionArgs)
+		}
 	case "help", "--help", "-h":
 		usage(a.Out)
 		return nil
 	default:
 		return fail(2, fmt.Errorf("unknown command %q", args[0]))
 	}
+	return fail(2, fmt.Errorf("unknown command %q", args[0]))
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "CMS — Context Management System\n\nUsage:\n  cms skill install [github-url]\n  cms skill list [--plain|--json]\n  cms skill remove <id>... [--yes]\n  cms skill remove --all [--yes]\n  cms mcp install [source] [options]\n  cms mcp list [--plain|--json]\n  cms mcp remove <id>...\n  cms mcp import <path> --target <target>\n  cms context new [--name name --description text --skill id ... --mcp id ...]\n  cms context edit <context> [--name name --description text --skill id ... --mcp id ...]\n  cms context list [--plain|--json]\n  cms global init [--skill id ...] [--mcp id ...] [--target codex] [--dry-run]\n  cms global remove [--yes] [--dry-run]\n  cms project init [context] [--target codex] [--dry-run]\n  cms project freeze <context>\n  cms project sync\n  cms project clear [--yes] [--dry-run]\n  cms config [show|list|get|set|unset] [default-targets ...]\n  cms shell completion <bash|zsh|fish|powershell>\n\nLegacy command aliases with hyphens remain accepted.")
+	fmt.Fprintln(w, "CMS — Context Management System\n\nUsage:\n  cms <module> <action> [options]\n  cms help\n\nModules and actions:")
+	for _, module := range moduleOrder {
+		fmt.Fprintf(w, "\n%s:\n", module)
+		for _, action := range moduleActionsHelp[module] {
+			command := fmt.Sprintf("cms %s %s", module, action.usage)
+			fmt.Fprintf(w, "  %-56s %s\n", command, action.description)
+		}
+	}
+	fmt.Fprintln(w, "\nRun cms <module> to see the available actions for a module.")
 }
 
 func (a *App) skillList(args []string) error {
@@ -932,18 +946,18 @@ func (a *App) completion(args []string) error {
 	switch args[0] {
 	case "bash":
 		fmt.Fprintln(a.Out, `_cms_complete() {
-  local cur="${COMP_WORDS[COMP_CWORD]}" cmd="${COMP_WORDS[1]}" action="${COMP_WORDS[2]}"
+  local cur="${COMP_WORDS[COMP_CWORD]}" cmd="${COMP_WORDS[1]}" action="${COMP_WORDS[2]}" cms_bin="${COMP_WORDS[0]}"
   if (( COMP_CWORD == 1 )); then
     COMPREPLY=( $(compgen -W "config skill mcp context global project shell help" -- "$cur") )
   elif [[ "$cmd" == "context" ]]; then
     if [[ "$action" == "edit" && COMP_CWORD -ge 3 ]]; then
-      COMPREPLY=( $(compgen -W "$(cms context list --plain 2>/dev/null)" -- "$cur") )
+      COMPREPLY=( $(compgen -W "$("$cms_bin" context list --plain 2>/dev/null)" -- "$cur") )
     elif (( COMP_CWORD == 2 )); then
       COMPREPLY=( $(compgen -W "new edit list" -- "$cur") )
     fi
   elif [[ "$cmd" == "project" ]]; then
     if [[ ("$action" == "init" || "$action" == "freeze") && COMP_CWORD -ge 3 ]]; then
-      COMPREPLY=( $(compgen -W "$(cms context list --plain 2>/dev/null)" -- "$cur") )
+      COMPREPLY=( $(compgen -W "$("$cms_bin" context list --plain 2>/dev/null)" -- "$cur") )
     elif (( COMP_CWORD == 2 )); then
       COMPREPLY=( $(compgen -W "init freeze sync clear" -- "$cur") )
     fi
@@ -957,20 +971,21 @@ func (a *App) completion(args []string) error {
     COMPREPLY=( $(compgen -W "completion" -- "$cur") )
   fi
 }
-complete -F _cms_complete cms`)
+complete -F _cms_complete cms ./cms`)
 	case "zsh":
 		fmt.Fprintln(a.Out, `_cms_complete() {
+  local cms_bin=$words[1]
   if (( CURRENT == 2 )); then
     compadd config skill mcp context global project shell help
   elif [[ $words[2] == context ]]; then
     if [[ $words[3] == edit && CURRENT -ge 4 ]]; then
-      compadd -- ${(f)"$(cms context list --plain 2>/dev/null)"}
+      compadd -- ${(f)"$($cms_bin context list --plain 2>/dev/null)"}
     else
       compadd new edit list
     fi
   elif [[ $words[2] == project ]]; then
     if [[ ($words[3] == init || $words[3] == freeze) && CURRENT -ge 4 ]]; then
-      compadd -- ${(f)"$(cms context list --plain 2>/dev/null)"}
+      compadd -- ${(f)"$($cms_bin context list --plain 2>/dev/null)"}
     else
       compadd init freeze sync clear
     fi
@@ -984,7 +999,7 @@ complete -F _cms_complete cms`)
     compadd completion
   fi
 }
-compdef _cms_complete cms`)
+compdef _cms_complete cms ./cms`)
 	case "fish":
 		fmt.Fprintln(a.Out, `complete -c cms -n '__fish_seen_subcommand_from project context' -a '(cms context list --plain 2>/dev/null)'`)
 	case "powershell":
