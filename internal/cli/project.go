@@ -15,10 +15,10 @@ import (
 
 func (a *App) freeze(args []string) error {
 	if len(args) < 1 {
-		return fail(2, errors.New("usage: cms freeze <context>"))
+		return fail(2, errors.New("usage: cms project freeze <context>"))
 	}
 	if len(args) > 1 {
-		return fail(2, errors.New("usage: cms freeze <context>"))
+		return fail(2, errors.New("usage: cms project freeze <context>"))
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -83,7 +83,7 @@ func (a *App) freeze(args []string) error {
 
 func (a *App) syncProject(args []string) error {
 	if len(args) != 0 {
-		return fail(2, errors.New("usage: cms sync"))
+		return fail(2, errors.New("usage: cms project sync"))
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -91,7 +91,7 @@ func (a *App) syncProject(args []string) error {
 	}
 	manifest, err := storage.LoadManifest(root)
 	if errors.Is(err, os.ErrNotExist) {
-		return fail(2, errors.New("cms.toml was not found; run cms freeze <context> first"))
+		return fail(2, errors.New("cms.toml was not found; run cms project freeze <context> first"))
 	}
 	if err != nil {
 		return fail(3, err)
@@ -215,7 +215,7 @@ func (a *App) syncManifest(manifest model.ProjectManifest) ([]model.SkillMetadat
 	if contextErr == nil {
 		if !sameContext(current, desired) {
 			rollback()
-			return nil, false, fail(3, fmt.Errorf("context %q differs from cms.toml; update the manifest with cms freeze or resolve it manually", manifest.Context))
+			return nil, false, fail(3, fmt.Errorf("context %q differs from cms.toml; update the manifest with cms project freeze or resolve it manually", manifest.Context))
 		}
 		return installed, false, nil
 	}

@@ -59,7 +59,7 @@ func (m *MCPRegistrySearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.InputMode = false
 		m.Err = msg.err
 		if msg.err == nil {
-			m.Status = fmt.Sprintf("%d resultado(s). Enter seleciona, / faz nova busca, Esc sai.", len(msg.results))
+			m.Status = fmt.Sprintf("%d result(s). Enter selects, / starts a new search, Esc quits.", len(msg.results))
 		}
 	case mcpSearchSpinnerTick:
 		if m.Busy {
@@ -86,10 +86,10 @@ func (m *MCPRegistrySearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.InputMode {
 			if strings.TrimSpace(m.Query) == "" {
-				m.Err = fmt.Errorf("digite uma busca para o Official MCP Registry")
+				m.Err = fmt.Errorf("enter a search query for the Official MCP Registry")
 				return m, nil
 			}
-			m.Busy, m.Err, m.Status = true, nil, "Buscando no Official MCP Registry..."
+			m.Busy, m.Err, m.Status = true, nil, "Searching the Official MCP Registry..."
 			query := m.Query
 			searchCmd := func() tea.Msg {
 				results, err := m.Provider.Search(context.Background(), query, m.Limit)

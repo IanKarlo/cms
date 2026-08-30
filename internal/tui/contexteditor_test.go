@@ -44,7 +44,7 @@ func TestContextEditorUsesThreePagesAndTabNavigation(t *testing.T) {
 	m.MCPOptions = []MCPOption{{ID: "mcp@1", Name: "mcp"}}
 	m.MCPDrafts = map[string]model.MCPRef{"mcp@1": {ID: "mcp@1"}}
 
-	if view := m.View(); !strings.Contains(view, "1. Nome e definição") || strings.Contains(view, "2. Skills\n\n  [ ] skill") {
+	if view := m.View(); !strings.Contains(view, "1. Name and definition") || strings.Contains(view, "2. Skills\n\n  [ ] skill") {
 		t.Fatalf("definition page is not isolated:\n%s", view)
 	}
 	for _, wantField := range []int{1, 2, 3, 4} {

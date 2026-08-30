@@ -58,7 +58,7 @@ func TestClearRequiresConfirmation(t *testing.T) {
 	if _, err := os.Stat(storage.ManifestPath(root)); err != nil {
 		t.Fatalf("manifest was removed after cancellation: %v", err)
 	}
-	if !strings.Contains(out.String(), "WARNING: cms clear removes project configuration") || !strings.Contains(out.String(), "Clear cancelled.") {
+	if !strings.Contains(out.String(), "WARNING: cms project clear removes project configuration") || !strings.Contains(out.String(), "Clear cancelled.") {
 		t.Fatalf("confirmation warning/cancellation missing:\n%s", out.String())
 	}
 }

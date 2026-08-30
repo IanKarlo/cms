@@ -286,11 +286,11 @@ func countClearMCPEntries(actions []harness.MCPAction) int {
 }
 
 func printClearWarning(out io.Writer, report clearReport) {
-	fmt.Fprintln(out, "WARNING: cms clear removes project configuration managed by CMS.")
+	fmt.Fprintln(out, "WARNING: cms project clear removes project configuration managed by CMS.")
 	fmt.Fprintln(out, "It may remove CMS-managed links and MCP entries from the listed harness targets.")
 	fmt.Fprintln(out, "Harness files and directories created outside CMS are preserved; only empty directories may be removed.")
 	fmt.Fprintln(out, "This removes cms.toml and .cms/state.toml and cannot be undone automatically.")
-	fmt.Fprint(out, "Proceed with cms clear? [y/N]: ")
+	fmt.Fprint(out, "Proceed with cms project clear? [y/N]: ")
 }
 
 func printClearReport(out io.Writer, report clearReport, dry bool) {

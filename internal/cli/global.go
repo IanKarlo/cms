@@ -186,7 +186,7 @@ func (a *App) globalContext(skillIDs, mcpIDs []string) (model.Context, bool, err
 	path := a.Contexts.Path(globalContextName)
 	if _, err := os.Stat(path); err == nil {
 		if len(skillIDs) > 0 || len(mcpIDs) > 0 {
-			return model.Context{}, false, errors.New("global context already exists; use context-edit global to change its skills")
+			return model.Context{}, false, errors.New("global context already exists; use context edit global to change its skills")
 		}
 		global, getErr := a.Contexts.Get(globalContextName)
 		return global, false, getErr
@@ -195,7 +195,7 @@ func (a *App) globalContext(skillIDs, mcpIDs []string) (model.Context, bool, err
 	}
 
 	if len(skillIDs) == 0 && len(mcpIDs) == 0 {
-		return model.Context{}, false, errors.New("global context was not found; create it with cms global-init --skill or --mcp <id>")
+		return model.Context{}, false, errors.New("global context was not found; create it with cms global init --skill or --mcp <id>")
 	}
 	global := model.Context{
 		SchemaVersion: 1,
@@ -259,7 +259,7 @@ func parseGlobalInitOptions(args []string) ([]string, []string, []string, bool, 
 			mcpIDs = append(mcpIDs, args[i+1])
 			i++
 		default:
-			return nil, nil, nil, false, fmt.Errorf("unknown global-init option %q", args[i])
+			return nil, nil, nil, false, fmt.Errorf("unknown global init option %q", args[i])
 		}
 	}
 	return targets, skillIDs, mcpIDs, dry, nil
@@ -274,11 +274,11 @@ func (a *App) globalRemove(args []string) error {
 		case "--dry-run":
 			dry = true
 		default:
-			return fail(2, fmt.Errorf("unknown global-remove option %q", arg))
+			return fail(2, fmt.Errorf("unknown global remove option %q", arg))
 		}
 	}
 	if a.JSON && !yes && !dry {
-		return fail(2, errors.New("global-remove --json requires --yes"))
+		return fail(2, errors.New("global remove --json requires --yes"))
 	}
 	root, err := os.UserHomeDir()
 	if err != nil {

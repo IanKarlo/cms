@@ -390,19 +390,19 @@ func (m *ContextEditorModel) View() string {
 	b.WriteString(contextEditorSteps(m.contextEditorPage(), m.NoColor) + "\n\n")
 	switch m.contextEditorPage() {
 	case 0:
-		b.WriteString(renderHeading("1. Nome e definição", m.NoColor) + "\n\n")
+		b.WriteString(renderHeading("1. Name and definition", m.NoColor) + "\n\n")
 		b.WriteString(fmt.Sprintf("Name: %s%s\nDescription: %s%s\n", m.Context.Name, fieldMark(m.Field == 0), m.Context.Description, fieldMark(m.Field == 1)))
-		b.WriteString("\nUse Tab para avançar entre os campos e ir para Skills.\n")
+		b.WriteString("\nUse Tab to move between fields and continue to Skills.\n")
 	case 1:
 		b.WriteString(renderHeading("2. Skills", m.NoColor) + "\n\n")
 		list := m.filtered()
 		if m.Filtering {
 			b.WriteString("Filter: " + m.Filter + "_\n\n")
 		} else if m.Filter != "" {
-			b.WriteString("Filter: " + m.Filter + "  (pressione / para editar)\n\n")
+			b.WriteString("Filter: " + m.Filter + "  (press / to edit)\n\n")
 		}
 		if len(list) == 0 {
-			b.WriteString("Nenhuma skill disponível para seleção.\n")
+			b.WriteString("No skills available for selection.\n")
 		}
 		for i, o := range list {
 			marker := "  "
@@ -419,11 +419,11 @@ func (m *ContextEditorModel) View() string {
 			}
 			b.WriteString(fmt.Sprintf("%s%s %s%s\n", marker, check, o.Name, suffix))
 		}
-		b.WriteString("\nEspaço seleciona • / filtra • Tab avança para MCPs\n")
+		b.WriteString("\nSpace selects • / filters • Tab moves to MCPs\n")
 	case 2:
 		b.WriteString(renderHeading("3. MCPs", m.NoColor) + "\n\n")
 		if len(m.MCPOptions) == 0 {
-			b.WriteString("Nenhum MCP registrado. Use cms mcp-install antes de adicioná-lo a um contexto.\n")
+			b.WriteString("No MCPs registered. Use cms mcp install before adding one to a context.\n")
 		} else {
 			for i, o := range m.MCPOptions {
 				marker := "  "
@@ -453,12 +453,12 @@ func (m *ContextEditorModel) View() string {
 				}
 			}
 		}
-		b.WriteString("\nEspaço seleciona • Tab navega pelos detalhes e volta ao início • Shift+Tab retorna\n")
+		b.WriteString("\nSpace selects • Tab navigates details and returns to the beginning • Shift+Tab goes back\n")
 	}
 	if m.Err != nil {
 		b.WriteString("\nError: " + m.Err.Error())
 	}
-	b.WriteString("\nCtrl+S salvar • Esc cancelar")
+	b.WriteString("\nCtrl+S save • Esc cancel")
 	return b.String()
 }
 
@@ -474,7 +474,7 @@ func (m *ContextEditorModel) contextEditorPage() int {
 }
 
 func contextEditorSteps(active int, noColor bool) string {
-	steps := []string{"1. Nome e definição", "2. Skills", "3. MCPs"}
+	steps := []string{"1. Name and definition", "2. Skills", "3. MCPs"}
 	for i, step := range steps {
 		if i == active {
 			steps[i] = "[ " + renderHeading(step, noColor) + " ]"

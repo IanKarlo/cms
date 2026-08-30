@@ -273,17 +273,17 @@ func (a *App) mcpInstall(args []string) error {
 			i++
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return fail(2, fmt.Errorf("unknown mcp-install option %q", args[i]))
+				return fail(2, fmt.Errorf("unknown mcp install option %q", args[i]))
 			}
 			if source != "" {
-				return fail(2, errors.New("mcp-install accepts only one source"))
+				return fail(2, errors.New("mcp install accepts only one source"))
 			}
 			source = args[i]
 		}
 	}
 	if source == "" && command == "" {
 		if !interactive(a.In) {
-			return fail(2, errors.New("mcp-install without a source requires an interactive terminal"))
+			return fail(2, errors.New("mcp install without a source requires an interactive terminal"))
 		}
 		if a.MCPProvider == nil {
 			return fail(5, errors.New("Official MCP Registry provider is unavailable"))
@@ -458,7 +458,7 @@ func (a *App) mcpList(args []string) error {
 	plain := has(args, "--plain")
 	jsonOut := a.JSON || has(args, "--json")
 	if plain && jsonOut {
-		return fail(2, errors.New("mcp-list --plain cannot be combined with --json"))
+		return fail(2, errors.New("mcp list --plain cannot be combined with --json"))
 	}
 	list, err := a.MCPs.List()
 	if err != nil {
@@ -526,7 +526,7 @@ func mcpPlainSource(m model.MCPMetadata) string {
 
 func (a *App) mcpRemove(args []string) error {
 	if len(args) == 0 {
-		return fail(2, errors.New("usage: cms mcp-remove <id>..."))
+		return fail(2, errors.New("usage: cms mcp remove <id>..."))
 	}
 	contexts, _ := a.Contexts.List()
 	root, _ := os.Getwd()
@@ -595,7 +595,7 @@ func (a *App) mcpRemove(args []string) error {
 
 func (a *App) mcpImport(args []string) error {
 	if len(args) < 1 {
-		return fail(2, errors.New("usage: cms mcp-import <path> --target <target>"))
+		return fail(2, errors.New("usage: cms mcp import <path> --target <target>"))
 	}
 	path := args[0]
 	target := flagValue(args, "--target")
