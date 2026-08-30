@@ -1,0 +1,7 @@
+{
+  "editor": {"formatOnSave": true},
+  // Cursor keeps unrelated settings in the same JSONC file.
+  "mcpServers": {
+    "manual-server": {"type": "stdio", "command": "manual-mcp"}
+  },
+}

@@ -82,6 +82,27 @@ func TestReconcileIdempotenceAndPreservation(t *testing.T) {
 	}
 }
 
+func TestReconcileDeduplicatesSharedHarnessSkillDirectory(t *testing.T) {
+	root, r, first, _ := setupLinker(t)
+	plan, err := BuildPlan(root, model.ProjectState{}, model.Context{Name: "ctx", Skills: []model.SkillRef{{ID: first.ID}}}, []harness.Adapter{harness.Codex{}, harness.Antigravity{}}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Desired) != 1 || len(plan.Actions) != 1 || plan.Actions[0].Kind != Create {
+		t.Fatalf("shared target was not deduplicated: desired=%#v actions=%#v", plan.Desired, plan.Actions)
+	}
+	if err := Apply(root, plan, r); err != nil {
+		t.Fatal(err)
+	}
+	state, err := storage.LoadState(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Links) != 1 || len(state.Targets) != 2 {
+		t.Fatalf("state lost harness/link information: %#v", state)
+	}
+}
+
 func TestReconcileRealDirectoryIsConflict(t *testing.T) {
 	root, r, first, _ := setupLinker(t)
 	target := filepath.Join(root, ".agents", "skills", first.Name)
@@ -137,5 +158,27 @@ func TestUnknownBrokenSymlinkIsConflict(t *testing.T) {
 	}
 	if len(plan.Conflicts()) != 1 {
 		t.Fatalf("expected broken unknown symlink conflict: %#v", plan.Actions)
+	}
+}
+
+func TestApplyWithRollbackRestoresLinksAndState(t *testing.T) {
+	root, r, first, _ := setupLinker(t)
+	plan, err := BuildPlan(root, model.ProjectState{}, model.Context{Name: "ctx", Skills: []model.SkillRef{{ID: first.ID}}}, []harness.Adapter{harness.Codex{}}, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollback, err := ApplyWithRollback(root, plan, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".agents", "skills", first.Name)); err != nil {
+		t.Fatal(err)
+	}
+	rollback()
+	if _, err := os.Lstat(filepath.Join(root, ".agents", "skills", first.Name)); !os.IsNotExist(err) {
+		t.Fatalf("link survived rollback: %v", err)
+	}
+	if _, err := os.Stat(storage.StatePath(root)); !os.IsNotExist(err) {
+		t.Fatalf("state survived rollback: %v", err)
 	}
 }

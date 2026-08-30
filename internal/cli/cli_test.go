@@ -79,6 +79,75 @@ func TestCLIContextAndInitEndToEnd(t *testing.T) {
 	}
 }
 
+func TestCLIMCPOnlyContextAndInit(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv("CMS_CONFIG_DIR", filepath.Join(root, "config"))
+	t.Setenv("CMS_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("CMS_CACHE_DIR", filepath.Join(root, "cache"))
+	app, err := New(&bytes.Buffer{}, &bytes.Buffer{}, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcp, _, err := app.MCPs.Register(model.MCPMetadata{Name: "demo", Transport: model.MCPTransportHTTP, Source: model.MCPSource{Type: model.MCPSourceRemote}, Remote: &model.MCPRemote{URL: "https://demo.test/mcp"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"context-new", "--name", "mcp-only", "--mcp", mcp.ID}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("context-new: %d %s", code, errOut.String())
+	}
+	if code := Run([]string{"init", "mcp-only", "--target", "cursor"}, &out, &errOut, strings.NewReader("")); code != 0 {
+		t.Fatalf("init: %d %s", code, errOut.String())
+	}
+	config, err := os.ReadFile(filepath.Join(root, ".cursor", "mcp.json"))
+	if err != nil || !strings.Contains(string(config), "demo") {
+		t.Fatalf("cursor config=%s err=%v", config, err)
+	}
+	state, err := storage.LoadState(root)
+	if err != nil || len(state.MCPEntries) != 1 || state.MCPEntries[0].Target != "cursor" {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+}
+
+func TestFreezeReportsMCPCount(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv("CMS_CONFIG_DIR", filepath.Join(root, "config"))
+	t.Setenv("CMS_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("CMS_CACHE_DIR", filepath.Join(root, "cache"))
+	var out, errOut bytes.Buffer
+	app, err := New(&out, &errOut, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcp := model.MCPMetadata{
+		Name:         "mcp",
+		Description:  "Test MCP",
+		Transport:    model.MCPTransportHTTP,
+		Source:       model.MCPSource{Type: model.MCPSourceRemote},
+		Remote:       &model.MCPRemote{URL: "https://mcp.test/server"},
+		Reproducible: true,
+	}
+	registered, _, err := app.MCPs.Register(mcp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Contexts.Save(model.Context{Name: "mcp-context", MCPRefs: []model.MCPRef{{ID: registered.ID}}, MCPs: []string{registered.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.freeze([]string{"mcp-context"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "with 0 skill(s) and 1 MCP(s)") {
+		t.Fatalf("freeze output omitted MCP count: %s", out.String())
+	}
+	manifest, err := storage.LoadManifest(root)
+	if err != nil || len(manifest.MCPs) != 1 {
+		t.Fatalf("manifest MCPs=%d err=%v", len(manifest.MCPs), err)
+	}
+}
+
 func TestSkillInstallRepositoryInstallsAllSkills(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)

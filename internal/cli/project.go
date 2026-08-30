@@ -28,11 +28,11 @@ func (a *App) freeze(args []string) error {
 	if err != nil {
 		return fail(6, err)
 	}
-	targets := append([]string(nil), a.Config.DefaultTargets...)
+	targets := a.defaultTargetNames()
 	if state, stateErr := storage.LoadState(root); stateErr == nil && state.Context == contextValue.Name && len(state.Targets) > 0 {
 		targets = append([]string(nil), state.Targets...)
 	}
-	manifest := model.ProjectManifest{SchemaVersion: 1, Context: contextValue.Name, Description: contextValue.Description, Targets: targets}
+	manifest := model.ProjectManifest{SchemaVersion: 2, Context: contextValue.Name, Description: contextValue.Description, Targets: targets}
 	for _, ref := range contextValue.Skills {
 		metadata, getErr := a.Registry.Get(ref.ID)
 		if getErr != nil {
@@ -43,14 +43,40 @@ func (a *App) freeze(args []string) error {
 		}
 		manifest.Skills = append(manifest.Skills, model.PinnedSkill{ID: metadata.ID, Name: metadata.Name, Description: metadata.Description, Source: metadata.Source})
 	}
+	refs := contextValue.MCPRefs
+	if len(refs) == 0 {
+		for _, id := range contextValue.MCPs {
+			refs = append(refs, model.MCPRef{ID: id})
+		}
+	}
+	manifest.ContextMCPs = append([]model.MCPRef(nil), refs...)
+	for _, ref := range refs {
+		m, getErr := a.MCPs.Get(ref.ID)
+		if getErr != nil {
+			return fail(6, getErr)
+		}
+		manifest.MCPs = append(manifest.MCPs, model.PinnedMCP{Metadata: m})
+		if !m.Reproducible {
+			fmt.Fprintf(a.Err, "warning: MCP %q is not reproducible; its source/version is not fully pinned\n", m.Name)
+		}
+	}
 	if err := storage.SaveManifest(root, manifest); err != nil {
 		return fail(3, err)
 	}
 	if a.JSON {
-		return jsonEncode(a.Out, manifest)
+		var warnings []string
+		for _, m := range manifest.MCPs {
+			if !m.Metadata.Reproducible {
+				warnings = append(warnings, fmt.Sprintf("MCP %q is not reproducible", m.Metadata.Name))
+			}
+		}
+		return jsonEncode(a.Out, struct {
+			Manifest model.ProjectManifest `json:"manifest"`
+			Warnings []string              `json:"warnings"`
+		}{manifest, warnings})
 	}
 	if !a.Quiet {
-		fmt.Fprintf(a.Out, "wrote %s with %d skill(s)\n", storage.ManifestPath(root), len(manifest.Skills))
+		fmt.Fprintf(a.Out, "wrote %s with %d skill(s) and %d MCP(s)\n", storage.ManifestPath(root), len(manifest.Skills), len(manifest.MCPs))
 	}
 	return nil
 }
@@ -79,7 +105,8 @@ func (a *App) syncProject(args []string) error {
 			Context string                `json:"context"`
 			Created bool                  `json:"context_created"`
 			Skills  []model.SkillMetadata `json:"skills"`
-		}{manifest.Context, created, installed})
+			MCPs    int                   `json:"mcps"`
+		}{manifest.Context, created, installed, len(manifest.MCPs)})
 	}
 	if !a.Quiet {
 		if created {
@@ -90,16 +117,25 @@ func (a *App) syncProject(args []string) error {
 		} else {
 			fmt.Fprintf(a.Out, "installed %d missing skill(s)\n", len(installed))
 		}
+		if len(manifest.MCPs) == 0 {
+			fmt.Fprintln(a.Out, "no MCPs in manifest")
+		} else {
+			fmt.Fprintf(a.Out, "synchronized %d MCP(s) from manifest\n", len(manifest.MCPs))
+		}
 	}
 	return nil
 }
 
 func (a *App) syncManifest(manifest model.ProjectManifest) ([]model.SkillMetadata, bool, error) {
 	newIDs := []string{}
+	newMCPIDs := []string{}
 	installed := []model.SkillMetadata{}
 	rollback := func() {
 		for _, id := range newIDs {
 			_ = a.Registry.Remove(id)
+		}
+		for _, id := range newMCPIDs {
+			_ = a.MCPs.Remove(id)
 		}
 	}
 	for _, pinned := range manifest.Skills {
@@ -145,10 +181,34 @@ func (a *App) syncManifest(manifest model.ProjectManifest) ([]model.SkillMetadat
 		newIDs = append(newIDs, metadata.ID)
 		installed = append(installed, metadata)
 	}
+	for _, pinned := range manifest.MCPs {
+		if pinned.Metadata.ID == "" || pinned.Metadata.CanonicalID() != pinned.Metadata.ID {
+			rollback()
+			return nil, false, fail(3, fmt.Errorf("MCP %q has an ID that does not match cms.toml", pinned.Metadata.ID))
+		}
+		existing, getErr := a.MCPs.Get(pinned.Metadata.ID)
+		if getErr == nil {
+			if existing.CanonicalID() != pinned.Metadata.CanonicalID() {
+				rollback()
+				return nil, false, fail(3, fmt.Errorf("installed MCP %q does not match cms.toml", pinned.Metadata.ID))
+			}
+		} else {
+			if _, _, regErr := a.MCPs.Register(pinned.Metadata); regErr != nil {
+				rollback()
+				return nil, false, fail(3, regErr)
+			}
+			newMCPIDs = append(newMCPIDs, pinned.Metadata.ID)
+		}
+	}
 
 	desired := model.Context{Name: manifest.Context, Description: manifest.Description}
 	for _, pinned := range manifest.Skills {
 		desired.Skills = append(desired.Skills, model.SkillRef{ID: pinned.ID})
+	}
+	desired.SchemaVersion = 2
+	desired.MCPRefs = append([]model.MCPRef(nil), manifest.ContextMCPs...)
+	for _, r := range desired.MCPRefs {
+		desired.MCPs = append(desired.MCPs, r.ID)
 	}
 	contextPath := a.Contexts.Path(manifest.Context)
 	current, contextErr := a.Contexts.Get(manifest.Context)
@@ -171,11 +231,27 @@ func (a *App) syncManifest(manifest model.ProjectManifest) ([]model.SkillMetadat
 }
 
 func sameContext(a, b model.Context) bool {
-	if a.Name != b.Name || a.Description != b.Description || len(a.Skills) != len(b.Skills) {
+	if a.Name != b.Name || a.Description != b.Description || len(a.Skills) != len(b.Skills) || len(a.MCPRefs) != len(b.MCPRefs) {
 		return false
 	}
 	for i := range a.Skills {
 		if a.Skills[i].ID != b.Skills[i].ID {
+			return false
+		}
+	}
+	for i := range a.MCPRefs {
+		if a.MCPRefs[i].ID != b.MCPRefs[i].ID || a.MCPRefs[i].Alias != b.MCPRefs[i].Alias || !sameStrings(a.MCPRefs[i].Tools.Allow, b.MCPRefs[i].Tools.Allow) || !sameStrings(a.MCPRefs[i].Tools.Deny, b.MCPRefs[i].Tools.Deny) {
+			return false
+		}
+	}
+	return true
+}
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

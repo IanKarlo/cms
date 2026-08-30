@@ -44,7 +44,7 @@ func (p Plan) Conflicts() []Action {
 	return out
 }
 
-func BuildPlan(root string, current model.ProjectState, desired model.Context, targets []harness.Adapter, registry skills.Registry) (Plan, error) {
+func BuildPlan(root string, current model.ProjectState, desired model.Context, targets []harness.Adapter, registry skills.Registry, global ...bool) (Plan, error) {
 	p := Plan{State: model.ProjectState{SchemaVersion: 1, Context: desired.Name}}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
@@ -60,12 +60,19 @@ func BuildPlan(root string, current model.ProjectState, desired model.Context, t
 		old[cleanRel(l.Target)] = l
 	}
 	newTargets := map[string]bool{}
+	seenDesired := map[string]bool{}
 	for _, adapter := range targets {
 		if !adapter.SupportsSymlink() {
 			return p, fmt.Errorf("harness %q does not support symlinks", adapter.ID())
 		}
-		if err := validateSkillDir(rootAbs, adapter.SkillDir(rootAbs)); err != nil {
-			p.Actions = append(p.Actions, Action{Kind: Conflict, Target: adapter.SkillDir(rootAbs), Reason: err.Error()})
+		skillDir := adapter.SkillDir(rootAbs)
+		if len(global) > 0 && global[0] {
+			if ga, ok := adapter.(harness.GlobalSkillAdapter); ok {
+				skillDir = ga.GlobalSkillDir(rootAbs)
+			}
+		}
+		if err := validateSkillDir(rootAbs, skillDir); err != nil {
+			p.Actions = append(p.Actions, Action{Kind: Conflict, Target: skillDir, Reason: err.Error()})
 			continue
 		}
 		for _, ref := range desired.Skills {
@@ -76,13 +83,20 @@ func BuildPlan(root string, current model.ProjectState, desired model.Context, t
 			if info, statErr := os.Stat(registry.Store.ContentPath(ref.ID)); statErr != nil || !info.IsDir() {
 				return p, fmt.Errorf("skill %q has metadata but its content is missing", ref.ID)
 			}
-			abs := filepath.Join(adapter.SkillDir(root), meta.Name)
+			abs := filepath.Join(skillDir, meta.Name)
 			rel, err := filepath.Rel(root, abs)
 			if err != nil {
 				return p, err
 			}
 			rel = filepath.ToSlash(rel)
 			newTargets[rel] = true
+			// Codex and Antigravity can share the same project skill path
+			// (.agents/skills). Keep one physical link while retaining both
+			// harnesses in ProjectState.Targets.
+			if seenDesired[rel] {
+				continue
+			}
+			seenDesired[rel] = true
 			p.Desired = append(p.Desired, model.ProjectLink{SkillID: ref.ID, Target: rel})
 			p.State.Links = append(p.State.Links, model.ProjectLink{SkillID: ref.ID, Target: rel})
 		}
@@ -198,6 +212,68 @@ func Apply(root string, p Plan, registry skills.Registry) error {
 		return err
 	}
 	return nil
+}
+
+// ApplyWithRollback applies a skill plan and returns a compensating action for
+// callers that are coordinating skills with other kinds of configuration.
+// Apply remains the small, backwards-compatible one-shot API.
+func ApplyWithRollback(root string, p Plan, registry skills.Registry) (func(), error) {
+	statePath := storage.StatePath(root)
+	oldState, stateErr := os.ReadFile(statePath)
+	stateExists := stateErr == nil
+	if stateErr != nil && !os.IsNotExist(stateErr) {
+		return nil, stateErr
+	}
+	statePerm := os.FileMode(0o644)
+	if info, err := os.Stat(statePath); err == nil {
+		statePerm = info.Mode().Perm()
+	}
+	type original struct {
+		exists  bool
+		symlink bool
+		target  string
+	}
+	originals := map[string]original{}
+	for _, a := range p.Actions {
+		path := filepath.Join(root, filepath.FromSlash(a.Target))
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			originals[path] = original{}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		o := original{exists: true, symlink: info.Mode()&os.ModeSymlink != 0}
+		if o.symlink {
+			o.target, err = os.Readlink(path)
+			if err != nil {
+				return nil, err
+			}
+		}
+		originals[path] = o
+	}
+	if err := Apply(root, p, registry); err != nil {
+		return nil, err
+	}
+	rollback := func() {
+		for path := range originals {
+			_ = os.Remove(path)
+		}
+		for path, o := range originals {
+			if !o.exists || !o.symlink {
+				continue
+			}
+			_ = os.MkdirAll(filepath.Dir(path), 0o755)
+			_ = os.Symlink(o.target, path)
+		}
+		if stateExists {
+			_ = storage.AtomicWrite(statePath, oldState, statePerm)
+		} else {
+			_ = os.Remove(statePath)
+		}
+	}
+	return rollback, nil
 }
 
 func validateSkillDir(root, dir string) error {

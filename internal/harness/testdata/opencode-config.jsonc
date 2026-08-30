@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // This user rule must survive CMS reconciliation.
+  "tools": {"manual_tool": true},
+  "mcp": {
+    "manual-server": {"type": "local", "command": ["manual-mcp"], "enabled": true},
+    "remote-server": {"type": "remote", "url": "https://remote.example/mcp", "enabled": true}
+  },
+}

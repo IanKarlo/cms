@@ -8,33 +8,38 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ikts/cms/internal/harness"
 	"github.com/ikts/cms/internal/linker"
+	"github.com/ikts/cms/internal/mcps"
 	"github.com/ikts/cms/internal/model"
 	"github.com/ikts/cms/internal/providers"
 	gh "github.com/ikts/cms/internal/providers/github"
+	mcpregistry "github.com/ikts/cms/internal/providers/mcpregistry"
 	"github.com/ikts/cms/internal/skills"
 	"github.com/ikts/cms/internal/storage"
 	"github.com/ikts/cms/internal/tui"
 )
 
 type App struct {
-	Out, Err  io.Writer
-	In        io.Reader
-	Paths     storage.Paths
-	Config    storage.Config
-	Registry  skills.Registry
-	Contexts  storage.ContextStore
-	Harnesses map[string]harness.Adapter
-	Provider  providers.SkillProvider
-	JSON      bool
-	Quiet     bool
-	Verbose   bool
-	NoColor   bool
+	Out, Err    io.Writer
+	In          io.Reader
+	Paths       storage.Paths
+	Config      storage.Config
+	Registry    skills.Registry
+	MCPs        mcps.Registry
+	Contexts    storage.ContextStore
+	Harnesses   map[string]harness.Adapter
+	Provider    providers.SkillProvider
+	MCPProvider providers.MCPProvider
+	JSON        bool
+	Quiet       bool
+	Verbose     bool
+	NoColor     bool
 }
 
 func New(out, errOut io.Writer, in io.Reader) (*App, error) {
@@ -59,7 +64,8 @@ func New(out, errOut io.Writer, in io.Reader) (*App, error) {
 		}
 		provider.Token = dotenvToken
 	}
-	return &App{Out: out, Err: errOut, In: in, Paths: p, Config: c, Registry: r, Contexts: storage.ContextStore{Paths: p, Registry: r.Store}, Harnesses: harness.Builtins(), Provider: provider}, nil
+	mcpTTL, _ := time.ParseDuration(c.MCPRegistryCacheTTL)
+	return &App{Out: out, Err: errOut, In: in, Paths: p, Config: c, Registry: r, MCPs: mcps.NewRegistry(p), Contexts: storage.ContextStore{Paths: p, Registry: r.Store}, Harnesses: harness.Builtins(), Provider: provider, MCPProvider: mcpregistry.New(c.MCPRegistryBaseURL, filepath.Join(p.CacheDir, "mcp-registry"), mcpTTL)}, nil
 }
 
 func Run(args []string, out, errOut io.Writer, in io.Reader) int {
@@ -76,6 +82,30 @@ func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 	app.JSON, app.Quiet, app.Verbose, app.NoColor = global.json, global.quiet, global.verbose, global.noColor
 	err = app.run(args)
 	if err != nil {
+		if app.JSON {
+			payload := map[string]any{"error": err.Error(), "code": codeOf(err)}
+			var pre MCPPreflightError
+			if errors.As(err, &pre) {
+				payload["code"] = pre.Code
+				payload["mcp"] = pre.MCP
+				if pre.Variable != "" {
+					payload["variable"] = pre.Variable
+				}
+				if pre.Runtime != "" {
+					payload["runtime"] = pre.Runtime
+				}
+			}
+			var variants MCPVariantSelectionError
+			if errors.As(err, &variants) {
+				payload["code"] = "mcp_variant_required"
+				payload["variants"] = variants.Variants
+				if variants.Requested != "" {
+					payload["requested_variant"] = variants.Requested
+				}
+			}
+			_ = json.NewEncoder(errOut).Encode(payload)
+			return codeOf(err)
+		}
 		fmt.Fprintln(errOut, "error:", err)
 		return codeOf(err)
 	}
@@ -84,12 +114,22 @@ func Run(args []string, out, errOut io.Writer, in io.Reader) int {
 
 func (a *App) run(args []string) error {
 	switch args[0] {
+	case "config":
+		return a.config(args[1:])
 	case "skill-list":
 		return a.skillList(args[1:])
 	case "skill-install":
 		return a.skillInstall(args[1:])
 	case "skill-remove":
 		return a.skillRemove(args[1:])
+	case "mcp-install":
+		return a.mcpInstall(args[1:])
+	case "mcp-list":
+		return a.mcpList(args[1:])
+	case "mcp-remove":
+		return a.mcpRemove(args[1:])
+	case "mcp-import":
+		return a.mcpImport(args[1:])
 	case "freeze":
 		return a.freeze(args[1:])
 	case "sync":
@@ -107,6 +147,8 @@ func (a *App) run(args []string) error {
 		return a.contextEdit(args[2:], true, args[1])
 	case "context-list":
 		return a.contextList(args[1:])
+	case "clear":
+		return a.clear(args[1:])
 	case "init":
 		return a.init(args[1:])
 	case "completion":
@@ -120,7 +162,9 @@ func (a *App) run(args []string) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "CMS — Context Management System\n\nUsage:\n  cms skill-install [github-url]\n  cms skill-list [--plain|--json]\n  cms skill-remove <id>... [--yes]\n  cms skill-remove --all [--yes]\n  cms freeze <context>\n  cms sync\n  cms global-init [--skill id ...] [--target codex] [--dry-run]\n  cms global-remove [--yes] [--dry-run]\n  cms context-new [--name name --description text --skill id ...]\n  cms context-edit <context> [--name name --description text --skill id ...]\n  cms context-list [--plain|--json]\n  cms init [context] [--target codex] [--dry-run]\n  cms init --global [--skill id ...] [--target codex] [--dry-run]\n  cms completion <bash|zsh|fish|powershell>")
+	fmt.Fprintln(w, "CMS — Context Management System\n\nUsage:\n  cms skill-install [github-url]\n  cms skill-list [--plain|--json]\n  cms skill-remove <id>... [--yes]\n  cms skill-remove --all [--yes]\n  cms mcp-install [source] [options]\n  cms mcp-list [--plain|--json]\n  cms mcp-remove <id>...\n  cms mcp-import <path> --target <target>\n  cms freeze <context>\n  cms sync\n  cms global-init [--skill id ...] [--target codex] [--dry-run]\n  cms global-remove [--yes] [--dry-run]\n  cms context-new [--name name --description text --skill id ...]\n  cms context-edit <context> [--name name --description text --skill id ...]\n  cms context-list [--plain|--json]\n  cms init [context] [--target codex] [--dry-run]\n  cms init --global [--skill id ...] [--target codex] [--dry-run]\n  cms completion <bash|zsh|fish|powershell>")
+	fmt.Fprintln(w, "  cms config [show|list|get|set|unset] [default-targets ...]")
+	fmt.Fprintln(w, "  cms clear [--yes] [--dry-run]")
 }
 
 func (a *App) skillList(args []string) error {
@@ -421,11 +465,14 @@ func (a *App) init(args []string) error {
 	if err != nil {
 		return fail(6, err)
 	}
+	if err := a.Contexts.Validate(c); err != nil {
+		return fail(3, err)
+	}
 	if len(targetNames) == 0 {
 		if hasManifest && manifest.Context == name && len(manifest.Targets) > 0 {
 			targetNames = manifest.Targets
 		} else {
-			targetNames = a.Config.DefaultTargets
+			targetNames = a.defaultTargetNames()
 		}
 	}
 	var adapters []harness.Adapter
@@ -444,6 +491,18 @@ func (a *App) init(args []string) error {
 	if err != nil {
 		return fail(3, err)
 	}
+	mcpPlans, err := a.buildMCPPlans(root, state, c, adapters, model.ScopeProject)
+	if err != nil {
+		return err
+	}
+	var mcpActions []harness.MCPAction
+	var mcpWarnings []harness.MCPWarning
+	var mcpEntries []model.MCPStateEntry
+	for _, item := range mcpPlans {
+		mcpActions = append(mcpActions, item.plan.Actions...)
+		mcpWarnings = append(mcpWarnings, item.plan.Warnings...)
+		mcpEntries = append(mcpEntries, item.plan.Entries...)
+	}
 	for _, action := range plan.Actions {
 		if action.Kind == linker.Conflict {
 			fmt.Fprintf(a.Err, "CONFLICT %s: %s\n", action.Target, action.Reason)
@@ -452,8 +511,33 @@ func (a *App) init(args []string) error {
 	if len(plan.Conflicts()) > 0 {
 		return fail(4, errors.New("link conflicts found; no files were changed"))
 	}
+	for _, action := range mcpActions {
+		if action.Kind == harness.MCPConflict {
+			fmt.Fprintf(a.Err, "CONFLICT %s: %s\n", action.Name, action.Reason)
+		}
+	}
+	if len(mcpActions) > 0 {
+		for _, w := range mcpWarnings {
+			if !a.JSON {
+				fmt.Fprintf(a.Err, "warning: %s\n", w.Message)
+			}
+		}
+	}
+	for _, item := range mcpPlans {
+		if len(item.plan.Conflicts()) > 0 {
+			return fail(4, errors.New("MCP config conflicts found; no files were changed"))
+		}
+	}
 	if a.JSON {
-		if err := json.NewEncoder(a.Out).Encode(plan.Actions); err != nil {
+		if len(mcpActions) == 0 {
+			if err := json.NewEncoder(a.Out).Encode(plan.Actions); err != nil {
+				return err
+			}
+		} else if err := json.NewEncoder(a.Out).Encode(struct {
+			Skills   any                  `json:"skills"`
+			MCP      []harness.MCPAction  `json:"mcp"`
+			Warnings []harness.MCPWarning `json:"warnings"`
+		}{plan.Actions, mcpActions, mcpWarnings}); err != nil {
 			return err
 		}
 	} else if !a.Quiet {
@@ -461,12 +545,44 @@ func (a *App) init(args []string) error {
 		for _, action := range plan.Actions {
 			fmt.Fprintf(a.Out, "%-8s %s\n", action.Kind, action.Target)
 		}
+		for _, action := range mcpActions {
+			fmt.Fprintf(a.Out, "%-8s %s (%s)\n", action.Kind, action.Name, action.Target)
+		}
 	}
 	if dry {
 		return nil
 	}
-	if err = linker.Apply(root, plan, a.Registry); err != nil {
-		return fail(4, err)
+	rollbackMCP, mcpErr := applyMCPPlans(mcpPlans)
+	if mcpErr != nil {
+		return fail(4, mcpErr)
+	}
+	rollbackLinks, applyErr := linker.ApplyWithRollback(root, plan, a.Registry)
+	if applyErr != nil {
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		return fail(4, applyErr)
+	}
+	finalState, loadErr := storage.LoadState(root)
+	if loadErr != nil {
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		return loadErr
+	}
+	finalState.SchemaVersion = 2
+	finalState.MCPEntries = mcpEntries
+	if saveErr := storage.SaveState(root, finalState); saveErr != nil {
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		return saveErr
 	}
 	if a.JSON || a.Quiet {
 		return nil
@@ -532,7 +648,7 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 			}
 			initial = loaded
 		}
-		result, saved, err := tui.RunContextEditor(a.Registry, initial, a.In, a.Out)
+		result, saved, err := tui.RunContextEditorWithMCP(a.Registry, a.MCPs, initial, a.In, a.Out)
 		if err != nil {
 			return fail(3, err)
 		}
@@ -558,7 +674,7 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 		}
 		return nil
 	}
-	name, desc, skillsArg := flagValue(args, "--name"), flagValue(args, "--description"), allFlagValues(args, "--skill")
+	name, desc, skillsArg, mcpArg := flagValue(args, "--name"), flagValue(args, "--description"), allFlagValues(args, "--skill"), allFlagValues(args, "--mcp")
 	if editing {
 		current, err := a.Contexts.Get(oldName[0])
 		if err != nil {
@@ -575,8 +691,16 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 				skillsArg = append(skillsArg, s.ID)
 			}
 		}
+		if len(mcpArg) == 0 {
+			for _, r := range current.MCPRefs {
+				mcpArg = append(mcpArg, r.ID)
+			}
+			if len(mcpArg) == 0 {
+				mcpArg = append(mcpArg, current.MCPs...)
+			}
+		}
 	} else if name == "" && !interactive(a.In) {
-		return fail(2, errors.New("context-new requires a TTY or --name/--skill flags"))
+		return fail(2, errors.New("context-new requires a TTY or --name/--skill/--mcp flags"))
 	} else if name != "" {
 		if _, err := os.Stat(a.Contexts.Path(name)); err == nil {
 			return fail(3, fmt.Errorf("context %q already exists", name))
@@ -598,7 +722,7 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 		if desc == "" {
 			desc = promptReader(a, reader, "Description: ")
 		}
-		if len(skillsArg) == 0 || (editing && len(args) == 0) {
+		if (len(skillsArg) == 0 && len(mcpArg) == 0) || (editing && len(args) == 0) {
 			installed, _ := a.Registry.List()
 			fmt.Fprintln(a.Out, "Installed skills:")
 			for _, s := range installed {
@@ -607,6 +731,13 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 			for _, id := range skillsArg {
 				if _, err := a.Registry.Get(id); err != nil {
 					fmt.Fprintf(a.Out, "  %s [missing from registry]\n", id)
+				}
+			}
+			mcps, _ := a.MCPs.List()
+			if len(mcps) > 0 {
+				fmt.Fprintln(a.Out, "Installed MCPs:")
+				for _, m := range mcps {
+					fmt.Fprintf(a.Out, "  %s (%s)\n", m.ID, m.Name)
 				}
 			}
 			label := "Skill IDs (comma-separated): "
@@ -619,6 +750,21 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 				for _, v := range strings.Split(raw, ",") {
 					if strings.TrimSpace(v) != "" {
 						skillsArg = append(skillsArg, strings.TrimSpace(v))
+					}
+				}
+			}
+			if len(mcpArg) == 0 || (editing && len(args) == 0) {
+				label := "MCP IDs (comma-separated): "
+				if editing && len(args) == 0 {
+					label = "MCP IDs (comma-separated, empty keeps current): "
+				}
+				raw := promptReader(a, reader, label)
+				if strings.TrimSpace(raw) != "" {
+					mcpArg = nil
+					for _, v := range strings.Split(raw, ",") {
+						if strings.TrimSpace(v) != "" {
+							mcpArg = append(mcpArg, strings.TrimSpace(v))
+						}
 					}
 				}
 			}
@@ -637,7 +783,10 @@ func (a *App) contextEdit(args []string, editing bool, oldName ...string) error 
 	for _, id := range skillsArg {
 		refs = append(refs, model.SkillRef{ID: id})
 	}
-	c := model.Context{Name: name, Description: desc, Skills: refs, MCPs: []string{}}
+	c := model.Context{Name: name, Description: desc, Skills: refs, MCPs: append([]string(nil), mcpArg...)}
+	for _, id := range mcpArg {
+		c.MCPRefs = append(c.MCPRefs, model.MCPRef{ID: id})
+	}
 	if !editing {
 		if _, err := os.Stat(a.Contexts.Path(name)); err == nil {
 			return fail(3, fmt.Errorf("context %q already exists", name))
@@ -673,7 +822,7 @@ func (a *App) completion(args []string) error {
   if [[ "$cmd" == "init" || "$cmd" == "context-edit" ]]; then
     COMPREPLY=( $(compgen -W "$(cms context-list --plain 2>/dev/null)" -- "$cur") )
   else
-	    COMPREPLY=( $(compgen -W "skill-install skill-list skill-remove freeze sync global-init global-remove context-new context-edit context-list init completion" -- "$cur") )
+	    COMPREPLY=( $(compgen -W "config skill-install skill-list skill-remove freeze sync global-init global-remove context-new context-edit context-list clear init completion" -- "$cur") )
   fi
 }
 complete -F _cms_complete cms`)
@@ -682,7 +831,7 @@ complete -F _cms_complete cms`)
   if [[ $words[2] == init || $words[2] == context-edit ]]; then
     compadd -- ${(f)"$(cms context-list --plain 2>/dev/null)"}
   else
-	    compadd skill-install skill-list skill-remove freeze sync global-init global-remove context-new context-edit context-list init completion
+	    compadd config skill-install skill-list skill-remove freeze sync global-init global-remove context-new context-edit context-list clear init completion
   fi
 }
 compdef _cms_complete cms`)

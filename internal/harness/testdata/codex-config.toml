@@ -1,0 +1,12 @@
+model = "gpt-5"
+
+[features]
+turn = true
+
+[mcp_servers.manual-server]
+command = "manual-mcp"
+args = ["--stdio"]
+
+[mcp_servers.remote-server]
+url = "https://manual.example/mcp"
+bearer_token_env_var = "MANUAL_TOKEN"

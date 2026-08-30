@@ -1,0 +1,10 @@
+{
+  /* Gemini/Antigravity project configuration. */
+  "mcpServers": {
+    "manual-server": {"command": "manual-mcp", "args": ["--stdio"]},
+    "remote-server": {
+      "serverUrl": "https://remote.example/mcp",
+      "disabledTools": ["delete_record"]
+    }
+  }
+}

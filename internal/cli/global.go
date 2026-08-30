@@ -23,7 +23,7 @@ func (a *App) globalInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	targetNames, skillIDs, dry, err := parseGlobalInitOptions(args)
+	targetNames, skillIDs, mcpIDs, dry, err := parseGlobalInitOptions(args)
 	if err != nil {
 		return err
 	}
@@ -31,12 +31,12 @@ func (a *App) globalInit(args []string) error {
 		return fail(2, fmt.Errorf("unsupported linking mode %q; the MVP supports symlink", a.Config.LinkMode))
 	}
 
-	global, created, err := a.globalContext(skillIDs)
+	global, created, err := a.globalContext(skillIDs, mcpIDs)
 	if err != nil {
 		return fail(3, err)
 	}
 	if len(targetNames) == 0 {
-		targetNames = a.Config.DefaultTargets
+		targetNames = a.defaultTargetNames()
 	}
 	adapters := make([]harness.Adapter, 0, len(targetNames))
 	for _, name := range targetNames {
@@ -50,7 +50,19 @@ func (a *App) globalInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	plan, err := linker.BuildPlan(root, state, global, adapters, a.Registry)
+	mcpPlans, err := a.buildMCPPlans(root, state, global, adapters, model.ScopeGlobal)
+	if err != nil {
+		return err
+	}
+	var mcpActions []harness.MCPAction
+	var mcpWarnings []harness.MCPWarning
+	var mcpEntries []model.MCPStateEntry
+	for _, item := range mcpPlans {
+		mcpActions = append(mcpActions, item.plan.Actions...)
+		mcpWarnings = append(mcpWarnings, item.plan.Warnings...)
+		mcpEntries = append(mcpEntries, item.plan.Entries...)
+	}
+	plan, err := linker.BuildPlan(root, state, global, adapters, a.Registry, true)
 	if err != nil {
 		return fail(3, err)
 	}
@@ -62,7 +74,29 @@ func (a *App) globalInit(args []string) error {
 	if len(plan.Conflicts()) > 0 {
 		return fail(4, errors.New("link conflicts found; no files were changed"))
 	}
+	for _, action := range mcpActions {
+		if action.Kind == harness.MCPConflict {
+			fmt.Fprintf(a.Err, "CONFLICT %s: %s\n", action.Name, action.Reason)
+		}
+	}
+	for _, w := range mcpWarnings {
+		if !a.JSON {
+			fmt.Fprintf(a.Err, "warning: %s\n", w.Message)
+		}
+	}
+	for _, item := range mcpPlans {
+		if len(item.plan.Conflicts()) > 0 {
+			return fail(4, errors.New("MCP config conflicts found; no files were changed"))
+		}
+	}
 	if a.JSON {
+		if len(mcpActions) > 0 {
+			return jsonEncode(a.Out, struct {
+				Skills   any                  `json:"skills"`
+				MCP      []harness.MCPAction  `json:"mcp"`
+				Warnings []harness.MCPWarning `json:"warnings"`
+			}{plan.Actions, mcpActions, mcpWarnings})
+		}
 		if err := jsonEncode(a.Out, plan.Actions); err != nil {
 			return err
 		}
@@ -86,11 +120,49 @@ func (a *App) globalInit(args []string) error {
 			return fail(3, err)
 		}
 	}
-	if err := linker.Apply(root, plan, a.Registry); err != nil {
+	rollbackMCP, mcpErr := applyMCPPlans(mcpPlans)
+	if mcpErr != nil {
 		if created {
 			_ = os.Remove(a.Contexts.Path(globalContextName))
 		}
-		return fail(4, err)
+		return fail(4, mcpErr)
+	}
+	rollbackLinks, applyErr := linker.ApplyWithRollback(root, plan, a.Registry)
+	if applyErr != nil {
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		if created {
+			_ = os.Remove(a.Contexts.Path(globalContextName))
+		}
+		return fail(4, applyErr)
+	}
+	finalState, loadErr := storage.LoadState(root)
+	if loadErr != nil {
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		if created {
+			_ = os.Remove(a.Contexts.Path(globalContextName))
+		}
+		return loadErr
+	}
+	finalState.SchemaVersion = 2
+	finalState.MCPEntries = mcpEntries
+	if saveErr := storage.SaveState(root, finalState); saveErr != nil {
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		if created {
+			_ = os.Remove(a.Contexts.Path(globalContextName))
+		}
+		return saveErr
 	}
 	if a.JSON || a.Quiet {
 		return nil
@@ -110,10 +182,10 @@ func (a *App) globalInit(args []string) error {
 	return nil
 }
 
-func (a *App) globalContext(skillIDs []string) (model.Context, bool, error) {
+func (a *App) globalContext(skillIDs, mcpIDs []string) (model.Context, bool, error) {
 	path := a.Contexts.Path(globalContextName)
 	if _, err := os.Stat(path); err == nil {
-		if len(skillIDs) > 0 {
+		if len(skillIDs) > 0 || len(mcpIDs) > 0 {
 			return model.Context{}, false, errors.New("global context already exists; use context-edit global to change its skills")
 		}
 		global, getErr := a.Contexts.Get(globalContextName)
@@ -122,8 +194,8 @@ func (a *App) globalContext(skillIDs []string) (model.Context, bool, error) {
 		return model.Context{}, false, err
 	}
 
-	if len(skillIDs) == 0 {
-		return model.Context{}, false, errors.New("global context was not found; create it with cms global-init --skill <id>")
+	if len(skillIDs) == 0 && len(mcpIDs) == 0 {
+		return model.Context{}, false, errors.New("global context was not found; create it with cms global-init --skill or --mcp <id>")
 	}
 	global := model.Context{
 		SchemaVersion: 1,
@@ -133,6 +205,10 @@ func (a *App) globalContext(skillIDs []string) (model.Context, bool, error) {
 	}
 	for _, id := range skillIDs {
 		global.Skills = append(global.Skills, model.SkillRef{ID: id})
+	}
+	for _, id := range mcpIDs {
+		global.MCPRefs = append(global.MCPRefs, model.MCPRef{ID: id})
+		global.MCPs = append(global.MCPs, id)
 	}
 	return global, true, nil
 }
@@ -157,8 +233,8 @@ func parseInitOptions(args []string) ([]string, bool, error) {
 	return targets, dry, nil
 }
 
-func parseGlobalInitOptions(args []string) ([]string, []string, bool, error) {
-	var targets, skillIDs []string
+func parseGlobalInitOptions(args []string) ([]string, []string, []string, bool, error) {
+	var targets, skillIDs, mcpIDs []string
 	dry := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -166,21 +242,27 @@ func parseGlobalInitOptions(args []string) ([]string, []string, bool, error) {
 			dry = true
 		case "--target":
 			if i+1 >= len(args) {
-				return nil, nil, false, errors.New("--target requires a value")
+				return nil, nil, nil, false, errors.New("--target requires a value")
 			}
 			targets = append(targets, args[i+1])
 			i++
 		case "--skill":
 			if i+1 >= len(args) {
-				return nil, nil, false, errors.New("--skill requires a value")
+				return nil, nil, nil, false, errors.New("--skill requires a value")
 			}
 			skillIDs = append(skillIDs, args[i+1])
 			i++
+		case "--mcp":
+			if i+1 >= len(args) {
+				return nil, nil, nil, false, errors.New("--mcp requires a value")
+			}
+			mcpIDs = append(mcpIDs, args[i+1])
+			i++
 		default:
-			return nil, nil, false, fmt.Errorf("unknown global-init option %q", args[i])
+			return nil, nil, nil, false, fmt.Errorf("unknown global-init option %q", args[i])
 		}
 	}
-	return targets, skillIDs, dry, nil
+	return targets, skillIDs, mcpIDs, dry, nil
 }
 
 func (a *App) globalRemove(args []string) error {
@@ -211,7 +293,31 @@ func (a *App) globalRemove(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !contextExists && state.Context != globalContextName && len(state.Links) == 0 {
+	var globalAdapters []harness.Adapter
+	targets := state.Targets
+	if len(targets) == 0 {
+		targets = a.defaultTargetNames()
+	}
+	for _, name := range targets {
+		if ad, ok := a.Harnesses[name]; ok {
+			globalAdapters = append(globalAdapters, ad)
+		}
+	}
+	mcpPlans, planErr := a.buildMCPPlans(root, state, model.Context{}, globalAdapters, model.ScopeGlobal)
+	if planErr != nil {
+		return planErr
+	}
+	for _, item := range mcpPlans {
+		for _, action := range item.plan.Actions {
+			if action.Kind == harness.MCPConflict {
+				fmt.Fprintf(a.Err, "CONFLICT %s: %s\n", action.Name, action.Reason)
+			}
+		}
+		if len(item.plan.Conflicts()) > 0 {
+			return fail(4, errors.New("MCP config conflicts found; no files were changed"))
+		}
+	}
+	if !contextExists && state.Context != globalContextName && len(state.Links) == 0 && len(state.MCPEntries) == 0 {
 		if a.JSON {
 			return jsonEncode(a.Out, []linker.Action{})
 		}
@@ -239,7 +345,18 @@ func (a *App) globalRemove(args []string) error {
 		}
 	}
 	if a.JSON {
-		if err := jsonEncode(a.Out, plan.Actions); err != nil {
+		var mcpActions []harness.MCPAction
+		for _, item := range mcpPlans {
+			mcpActions = append(mcpActions, item.plan.Actions...)
+		}
+		if len(mcpActions) > 0 {
+			if err := jsonEncode(a.Out, struct {
+				Skills []linker.Action     `json:"skills"`
+				MCP    []harness.MCPAction `json:"mcp"`
+			}{plan.Actions, mcpActions}); err != nil {
+				return err
+			}
+		} else if err := jsonEncode(a.Out, plan.Actions); err != nil {
 			return err
 		}
 	} else if !a.Quiet {
@@ -253,13 +370,50 @@ func (a *App) globalRemove(args []string) error {
 	if dry {
 		return nil
 	}
+	var rollbackLinks func()
 	if state.Context != "" || len(state.Targets) > 0 || len(state.Links) > 0 {
-		if err := linker.Apply(root, plan, a.Registry); err != nil {
-			return fail(4, err)
+		var applyErr error
+		rollbackLinks, applyErr = linker.ApplyWithRollback(root, plan, a.Registry)
+		if applyErr != nil {
+			return fail(4, applyErr)
 		}
+	}
+	rollbackMCP, mcpErr := applyMCPPlans(mcpPlans)
+	if mcpErr != nil {
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		return fail(4, mcpErr)
+	}
+	finalState, loadErr := storage.LoadState(root)
+	if loadErr != nil {
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		return loadErr
+	}
+	finalState.MCPEntries = nil
+	finalState.SchemaVersion = 2
+	if saveErr := storage.SaveState(root, finalState); saveErr != nil {
+		if rollbackMCP != nil {
+			rollbackMCP()
+		}
+		if rollbackLinks != nil {
+			rollbackLinks()
+		}
+		return saveErr
 	}
 	if contextExists {
 		if err := os.Remove(a.Contexts.Path(globalContextName)); err != nil && !os.IsNotExist(err) {
+			if rollbackMCP != nil {
+				rollbackMCP()
+			}
+			if rollbackLinks != nil {
+				rollbackLinks()
+			}
 			return fail(3, err)
 		}
 	}

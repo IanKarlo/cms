@@ -35,6 +35,17 @@ func parseDocument(input string) (document, error) {
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = strings.TrimSpace(line[1 : len(line)-1])
+			// TOML permits a subtable immediately below an array-of-tables
+			// element, e.g. [[mcps]] followed by [mcps.tools]. The small
+			// parser stores those keys on the most recently opened element so
+			// context/manifest loaders can consume both spellings.
+			if dot := strings.IndexByte(section, '.'); dot > 0 {
+				parent := section[:dot]
+				if rows := d.arrayTables[parent]; len(rows) > 0 {
+					current = rows[len(rows)-1]
+					continue
+				}
+			}
 			if d.scalars[section] == nil {
 				d.scalars[section] = map[string]string{}
 			}

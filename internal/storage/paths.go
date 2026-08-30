@@ -39,4 +39,5 @@ func ResolvePaths() (Paths, error) {
 func (p Paths) ContextsDir() string { return filepath.Join(p.DataDir, "contexts") }
 func (p Paths) SkillsDir() string   { return filepath.Join(p.DataDir, "skills") }
 func (p Paths) MetadataDir() string { return filepath.Join(p.DataDir, "skill-metadata") }
+func (p Paths) MCPDir() string      { return filepath.Join(p.DataDir, "mcps") }
 func (p Paths) ConfigFile() string  { return filepath.Join(p.ConfigDir, "config.toml") }

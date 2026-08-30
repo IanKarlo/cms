@@ -26,6 +26,7 @@ func TestContextListViewHasTableAndDetails(t *testing.T) {
 func TestContextListFiltersByName(t *testing.T) {
 	m := NewContextListModel([]model.Context{{Name: "backend"}, {Name: "frontend"}})
 	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("/")},
 		{Type: tea.KeyRunes, Runes: []rune("back")},
 	} {
 		updated, _ := m.Update(key)
@@ -38,9 +39,10 @@ func TestContextListFiltersByName(t *testing.T) {
 
 func TestContextListNavigatesWithArrowsAndVimKeys(t *testing.T) {
 	m := NewContextListModel([]model.Context{{Name: "one"}, {Name: "two"}})
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(*ContextListModel)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.Filtering {
+		t.Fatal("context list should start focused on the list")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(*ContextListModel)
 	if m.Cursor != 1 {
 		t.Fatalf("cursor after down = %d, want 1", m.Cursor)

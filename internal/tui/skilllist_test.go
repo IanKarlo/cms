@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ func TestSkillListFiltersByName(t *testing.T) {
 		{Name: "api-design", ID: "api-design@def456"},
 	})
 	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("/")},
 		{Type: tea.KeyRunes, Runes: []rune("go")},
 		{Type: tea.KeySpace, Runes: []rune(" ")},
 		{Type: tea.KeyRunes, Runes: []rune("testing")},
@@ -64,5 +66,28 @@ func TestSkillListWrapsLongDescription(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "Description:\n  This is a long description") {
 		t.Fatalf("wrapped description not rendered:\n%s", view)
+	}
+}
+
+func TestSkillListUsesSlidingWindow(t *testing.T) {
+	skills := make([]model.SkillMetadata, 15)
+	for i := range skills {
+		skills[i] = model.SkillMetadata{Name: fmt.Sprintf("skill-%02d", i), ID: fmt.Sprintf("skill-%02d@abc123", i)}
+	}
+	m := NewSkillListModel(skills)
+	m.Width = 100
+	m.Filtering = false
+	view := m.View()
+	if !strings.Contains(view, "Showing 1–8 of 15") || strings.Contains(view, "skill-08") {
+		t.Fatalf("initial skill window is incorrect:\n%s", view)
+	}
+
+	for i := 0; i < 8; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(*SkillListModel)
+	}
+	view = m.View()
+	if !strings.Contains(view, "Showing 2–9 of 15") || !strings.Contains(view, "skill-08") || strings.Contains(view, "skill-00") {
+		t.Fatalf("sliding skill window is incorrect:\n%s", view)
 	}
 }

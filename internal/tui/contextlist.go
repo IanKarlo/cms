@@ -23,7 +23,7 @@ func NewContextListModel(contexts []model.Context) *ContextListModel {
 }
 
 func NewContextListModelWithSkillNames(contexts []model.Context, skillNames map[string]string) *ContextListModel {
-	return &ContextListModel{Contexts: contexts, SkillNames: skillNames, Filtering: true}
+	return &ContextListModel{Contexts: contexts, SkillNames: skillNames}
 }
 func (m *ContextListModel) Init() tea.Cmd { return nil }
 func (m *ContextListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -127,7 +127,11 @@ func (m *ContextListModel) View() string {
 			b.WriteString("  • " + name + "\n")
 		}
 	}
-	b.WriteString("\nType to filter • Enter browse • / edit filter • ↑↓ or j/k navigate • Esc quit")
+	if m.Filtering {
+		b.WriteString("\nType to filter • Enter browse • Esc quit")
+	} else {
+		b.WriteString("\n↑↓ or j/k navigate • / edit filter • Esc quit")
+	}
 	return b.String()
 }
 

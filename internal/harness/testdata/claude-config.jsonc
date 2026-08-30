@@ -1,0 +1,8 @@
+{
+  // Project settings are user-owned.
+  "permissions": {"allow": ["Bash(go test ./...)"]},
+  "mcpServers": {
+    "manual-server": {"type": "stdio", "command": "manual-mcp"},
+    "legacy-server": {"type": "http", "url": "https://legacy.example/mcp"}
+  }
+}

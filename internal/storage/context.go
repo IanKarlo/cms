@@ -45,7 +45,8 @@ func (s ContextStore) Get(name string) (model.Context, error) {
 		return model.Context{}, err
 	}
 	desc, _ := optional(d, "", "description", "")
-	c := model.Context{SchemaVersion: 1, Name: n, Description: desc, MCPs: []string{}}
+	version := intValue(d.scalars[""]["schema_version"], 1)
+	c := model.Context{SchemaVersion: version, Name: n, Description: desc, MCPs: []string{}}
 	for _, row := range d.arrayTables["skills"] {
 		id, err := parseString(row["id"])
 		if err != nil {
@@ -55,6 +56,35 @@ func (s ContextStore) Get(name string) (model.Context, error) {
 	}
 	if ids := d.arrays[""]["mcps"]; ids != nil {
 		c.MCPs = ids
+		for _, id := range ids {
+			c.MCPRefs = append(c.MCPRefs, model.MCPRef{ID: id})
+		}
+	}
+	for _, row := range d.arrayTables["mcps"] {
+		id, e := parseString(row["id"])
+		if e != nil || id == "" {
+			return c, fmt.Errorf("invalid context MCP reference")
+		}
+		ref := model.MCPRef{ID: id}
+		ref.Alias, _ = parseString(row["alias"])
+		for _, list := range []string{"allow", "deny"} {
+			if raw := row[list]; raw != "" {
+				vals, pe := parseArray(raw)
+				if pe != nil {
+					return c, pe
+				}
+				if list == "allow" {
+					ref.Tools.Allow = vals
+				} else {
+					ref.Tools.Deny = vals
+				}
+			}
+		}
+		c.MCPRefs = append(c.MCPRefs, ref)
+		c.MCPs = append(c.MCPs, id)
+	}
+	if c.SchemaVersion == 0 {
+		c.SchemaVersion = 1
 	}
 	return c, nil
 }
@@ -83,8 +113,8 @@ func (s ContextStore) Validate(c model.Context) error {
 	if err := ValidateContextName(c.Name); err != nil {
 		return err
 	}
-	if len(c.Skills) == 0 {
-		return fmt.Errorf("context %q must contain at least one skill", c.Name)
+	if len(c.Skills) == 0 && len(c.MCPRefs) == 0 && len(c.MCPs) == 0 {
+		return fmt.Errorf("context %q must contain at least one skill or MCP", c.Name)
 	}
 	seenIDs, seenNames := map[string]bool{}, map[string]bool{}
 	for _, ref := range c.Skills {
@@ -100,6 +130,41 @@ func (s ContextStore) Validate(c model.Context) error {
 			return fmt.Errorf("skills in a context cannot share harness name %q", m.Name)
 		}
 		seenNames[m.Name] = true
+	}
+	mcpRegistry := MCPRegistry{Paths: s.Paths}
+	refs := c.MCPRefs
+	if len(refs) == 0 {
+		for _, id := range c.MCPs {
+			refs = append(refs, model.MCPRef{ID: id})
+		}
+	}
+	seenMCP, seenNames := map[string]bool{}, map[string]bool{}
+	for _, ref := range refs {
+		if ref.ID == "" || seenMCP[ref.ID] {
+			return fmt.Errorf("MCP %q is listed more than once", ref.ID)
+		}
+		seenMCP[ref.ID] = true
+		m, err := mcpRegistry.Get(ref.ID)
+		if err != nil {
+			return err
+		}
+		if err := model.ValidateMCPName(ref.Alias); ref.Alias != "" && err != nil {
+			return err
+		}
+		if err := ref.Tools.Validate(); err != nil {
+			return err
+		}
+		name := m.ExposedName(ref)
+		if seenNames[name] {
+			return fmt.Errorf("MCPs in a context cannot share exposed name %q", name)
+		}
+		seenNames[name] = true
+		for _, deny := range ref.Tools.Deny {
+			for _, allow := range ref.Tools.Allow {
+				if deny == allow { /* valid; adapter reports conflict/warning */
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -132,9 +197,22 @@ func (s ContextStore) Rename(oldName string, c model.Context) error {
 
 func (s ContextStore) write(c model.Context, path string) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "schema_version = 1\nname = %s\ndescription = %s\nmcps = %s\n\n", quote(c.Name), quote(c.Description), array(c.MCPs))
+	version := c.SchemaVersion
+	if version < 2 {
+		version = 2
+	}
+	fmt.Fprintf(&b, "schema_version = %d\nname = %s\ndescription = %s\n\n", version, quote(c.Name), quote(c.Description))
 	for _, ref := range c.Skills {
 		fmt.Fprintf(&b, "[[skills]]\nid = %s\n\n", quote(ref.ID))
+	}
+	refs := c.MCPRefs
+	if len(refs) == 0 {
+		for _, id := range c.MCPs {
+			refs = append(refs, model.MCPRef{ID: id})
+		}
+	}
+	for _, ref := range refs {
+		fmt.Fprintf(&b, "[[mcps]]\nid = %s\nalias = %s\nallow = %s\ndeny = %s\n\n", quote(ref.ID), quote(ref.Alias), array(ref.Tools.Allow), array(ref.Tools.Deny))
 	}
 	return AtomicWrite(path, []byte(b.String()), 0o644)
 }

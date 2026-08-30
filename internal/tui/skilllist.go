@@ -19,7 +19,7 @@ type SkillListModel struct {
 }
 
 func NewSkillListModel(skills []model.SkillMetadata) *SkillListModel {
-	return &SkillListModel{Skills: skills, Filtering: true}
+	return &SkillListModel{Skills: skills}
 }
 
 func (m *SkillListModel) Init() tea.Cmd { return nil }
@@ -113,15 +113,21 @@ func (m *SkillListModel) View() string {
 	} else {
 		b.WriteString("Filter: " + m.Filter + "  (press / to edit)\n")
 	}
-	b.WriteString(fmt.Sprintf("Showing %d of %d\n\n", len(items), len(m.Skills)))
+	start, end := skillVisibleRange(m.Cursor, len(items), m.visibleCount())
+	visible := items[start:end]
+	if len(items) == 0 {
+		b.WriteString(fmt.Sprintf("Showing 0 of %d\n\n", len(m.Skills)))
+	} else {
+		b.WriteString(fmt.Sprintf("Showing %d–%d of %d\n\n", start+1, end, len(items)))
+	}
 
-	nameWidth, idWidth, sourceWidth := skillTableWidths(m.Width, items)
+	nameWidth, idWidth, sourceWidth := skillTableWidths(m.Width, visible)
 	b.WriteString(skillTableBorder('┌', '┬', '┐', nameWidth, idWidth, sourceWidth) + "\n")
 	b.WriteString(skillTableRow("NAME", "ID", "SOURCE", nameWidth, idWidth, sourceWidth) + "\n")
 	b.WriteString(skillTableBorder('├', '┼', '┤', nameWidth, idWidth, sourceWidth) + "\n")
-	for i, skill := range items {
+	for i, skill := range visible {
 		name := skill.Name
-		if i == m.Cursor {
+		if start+i == m.Cursor {
 			name = "▸ " + name
 		}
 		source := skill.Source.Repository
@@ -146,8 +152,45 @@ func (m *SkillListModel) View() string {
 		}
 		b.WriteString("ID: " + selected.ID + "\n")
 	}
-	b.WriteString("\nType to filter • Enter browse • / edit filter • ↑↓ navigate • Esc quit")
+	if m.Filtering {
+		b.WriteString("\nType to filter • Enter browse • Esc quit")
+	} else {
+		b.WriteString("\n↑↓ navigate • / edit filter • Esc quit")
+	}
 	return b.String()
+}
+
+func (m *SkillListModel) visibleCount() int {
+	// Keep the list compact and predictable, like the MCP installer browser.
+	return 8
+}
+
+func skillVisibleRange(selected, total, count int) (int, int) {
+	if total == 0 {
+		return 0, 0
+	}
+	if count < 1 {
+		count = 1
+	}
+	if count > total {
+		count = total
+	}
+	if selected < 0 {
+		selected = 0
+	}
+	if selected >= total {
+		selected = total - 1
+	}
+	// Keep the cursor in the current window until it reaches an edge, then
+	// advance one row at a time as navigation continues.
+	start := selected - count + 1
+	if start < 0 {
+		start = 0
+	}
+	if start+count > total {
+		start = total - count
+	}
+	return start, start + count
 }
 
 func skillTableWidths(terminalWidth int, items []model.SkillMetadata) (int, int, int) {

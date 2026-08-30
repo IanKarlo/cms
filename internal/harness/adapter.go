@@ -32,4 +32,12 @@ func (Claude) Detect(root string) (bool, error) {
 func (Claude) SkillDir(root string) string { return filepath.Join(root, ".claude", "skills") }
 func (Claude) SupportsSymlink() bool       { return true }
 
-func Builtins() map[string]Adapter { return map[string]Adapter{"codex": Codex{}, "claude": Claude{}} }
+func Builtins() map[string]Adapter {
+	return map[string]Adapter{
+		"codex":       Codex{},
+		"claude":      Claude{},
+		"antigravity": Antigravity{},
+		"cursor":      Cursor{},
+		"opencode":    OpenCode{},
+	}
+}
